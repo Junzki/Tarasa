@@ -50,3 +50,10 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# CMake
+[Bb]uild/
+
+# Local editors'
+.vs/
+.vscode/
