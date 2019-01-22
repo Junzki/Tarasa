@@ -53,6 +53,7 @@ dkms.conf
 
 # CMake
 [Bb]uild/
+CMakeSettings.json
 
 # Local editors'
 .vs/
