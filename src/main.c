@@ -3,8 +3,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <getopt.h>
+#include <signal.h>
 #include <sys/socket.h>
-#include <sys/signal.h>
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
 #include <poll.h>
@@ -25,9 +25,9 @@ static int alive = 1;
 void load_opt(int, char**);
 void sigint_handler(int);
 void cast_ipaddress(char**, struct sockaddr_in);
-void close_conn(struct pollfd*, int*);
-int  clean_fdset(struct pollfd**);
+void close_conn(struct pollfd*);
 void echo(int, ssize_t);
+int  hold_client(struct pollfd*, int);
 
 
 int
@@ -44,8 +44,16 @@ main(int argc, char** argv)
     struct sockaddr_in client_addr;
     struct pollfd      rfds[MAX_FD];
 
-    char buf[BUFSIZ];
-    int  nfds = 1;
+    char    buf[BUFSIZ];
+    nfds_t  nfds = MAX_FD;
+    int     index;
+
+    /* Initialize fd holder. */
+    for (index = 0; index < MAX_FD; ++index)
+    {
+        rfds[index].fd     = -1;
+        rfds[index].events = 0;
+    }
 
     bzero(&buf, BUFSIZ);
     bzero(&server_addr, sizeof(server_addr));
@@ -66,8 +74,8 @@ main(int argc, char** argv)
     listen(server_sock, 0);
     printf("Listening on port %d...\n", port);
 
-    rfds[nfds - 1].fd     = server_sock;
-    rfds[nfds - 1].events = POLLIN;
+    rfds[0].fd     = server_sock;
+    rfds[0].events = POLLIN;
 
     while (alive)
     {
@@ -91,28 +99,31 @@ main(int argc, char** argv)
             {
                 char* inaddr;
                 clientfd = accept(currentfd, (struct sockaddr*)&client_addr, &client_siz);
-                ++nfds;
-
-                rfds[nfds - 1].fd     = clientfd;
-                rfds[nfds - 1].events = POLLIN;
+                
+                if (hold_client(rfds, clientfd) == -1)
+                {
+                    perror("Maximum fd exceed.");
+                    continue;
+                }
 
                 cast_ipaddress(&inaddr, client_addr);
                 printf("Received connection from %s.\n", inaddr);
                 continue;
             }
 
-            // ioctl(currentfd, FIONREAD, &nread);
-            // if (0 == nread)
-            // {
-            //     close_conn(&rfds[indexfd], &nfds);
-            //     // nfds = clean_fdset((struct pollfd**)&rfds);
-            //     continue;
-            // }
-
             echo(currentfd, nread);
-            close_conn(&rfds[indexfd], &nfds);
-            // nfds = clean_fdset((struct pollfd**)&rfds);
+            close_conn(&rfds[indexfd]);
         }
+    }
+    
+    for (index = 0; index < nfds; ++index)
+    {
+        int currentfd = rfds[index].fd;
+        if (-1 == currentfd)
+            continue;
+
+        shutdown(currentfd, SHUT_RDWR);
+        printf("Fd %d shutdown.\n", currentfd);
     }
 
     return EXIT_SUCCESS;
@@ -123,8 +134,7 @@ void
 sigint_handler(int signo)
 {
     alive = 0;
-    // printf("Shutdown gracefully...\n");
-    DIE("Shutdown gracefully...\n");
+    printf("Shutdown gracefully...\n");
 }
 
 void load_opt(int argc, char** argv)
@@ -171,15 +181,13 @@ cast_ipaddress(char** addr, struct sockaddr_in client_addr)
 
 
 void
-close_conn(struct pollfd* item, int* nfds)
+close_conn(struct pollfd* item)
 {
     shutdown(item->fd, SHUT_RDWR);
     printf("Fd %d disconnected.\n", item->fd);
 
     item->fd     = -1;
     item->events = 0;
-
-    --(*nfds);
 }
 
 
@@ -194,4 +202,24 @@ void echo(int fd, ssize_t total)
         nread = read(fd, buf, BUFSIZ);
         write(fd, buf, nread);
     } while (nread >= BUFSIZ);
+}
+
+
+int
+hold_client(struct pollfd* rfds, int fd)
+{
+    int index;
+    for (index = 0; index < MAX_FD; ++index)
+    {
+        if (-1 == rfds[index].fd)
+        {
+            rfds[index].fd     = fd;
+            rfds[index].events = POLLIN;
+
+            printf("Fd %d has been held in keyhole %d.\n", fd, index);
+            return 0;
+        }
+    }
+
+    return -1;
 }
